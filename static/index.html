@@ -65,7 +65,6 @@ const $ = (id) => document.getElementById(id);
 const SRC_LABEL = { manual: "ручные субтитры", auto: "автосубтитры", whisper: "Whisper" };
 let jobId = null;
 let pollTimer = null;
-let currentVideoId = null;
 let availableLangs = [];
 let currentLang = null;
 
@@ -173,7 +172,6 @@ async function openTranscript(videoId, lang) {
     const url = "/api/transcript/" + encodeURIComponent(videoId) +
       (lang ? "?lang=" + encodeURIComponent(lang) : "");
     const data = await (await api(url)).json();
-    currentVideoId = videoId;
     currentLang = lang || data.language;
     availableLangs = data.available_languages || [];
     $("v-title").textContent = data.title || videoId;

@@ -105,11 +105,6 @@ def _language_candidates(table, want: str | None) -> list[str]:
     return ordered + [k for k in sorted(keys) if k not in ordered]
 
 
-def _pick_language(keys: list, want: str | None) -> str | None:
-    candidates = _language_candidates(keys, want)
-    return candidates[0] if candidates else None
-
-
 def _pick_format(formats: list) -> dict | None:
     for ext in _CAPTION_EXTS:
         for fmt in formats:
