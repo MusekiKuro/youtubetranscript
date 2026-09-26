@@ -40,6 +40,10 @@ class JobStore:
         job = Job(job_id=job_id, lang=lang, items=[JobItem(url=u) for u in urls])
         with self._lock:
             self._jobs[job_id] = job
+        if not job.items:
+            with self._lock:
+                job.status = "done"
+            return job_id
         for index in range(len(job.items)):
             self._pool.submit(self._run_item, job_id, index)
         return job_id

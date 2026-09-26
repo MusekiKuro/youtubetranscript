@@ -95,3 +95,13 @@ def test_lang_passed_through(monkeypatch):
 def test_get_unknown_job_returns_none():
     store = batch.JobStore()
     assert store.get("nope") is None
+
+
+def test_empty_url_list_job_is_done_immediately():
+    store = batch.JobStore()
+
+    job_id = store.create([])
+    job = store.get(job_id)
+
+    assert job["status"] == "done"
+    assert job["items"] == []
