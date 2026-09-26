@@ -133,10 +133,10 @@ def _from_subtitles(
             continue
         try:
             raw = _fetch_captions(fmt["url"])
+            segments = parse_vtt(raw) if fmt["ext"] == "vtt" else parse_srt(raw)
         except Exception as exc:
-            logger.warning("caption fetch failed for %s: %s", url, exc)
+            logger.warning("caption fetch/parse failed for %s: %s", url, exc)
             continue
-        segments = parse_vtt(raw) if fmt["ext"] == "vtt" else parse_srt(raw)
         if not segments:
             continue
         return TranscriptResult(
@@ -175,6 +175,13 @@ def _transcribe_via_whisper(
     return parse_srt(srt_text), lang
 
 
+def _save_cache(video_id: str, result: TranscriptResult) -> None:
+    try:
+        cache.save(video_id, result.to_cache())
+    except Exception as exc:
+        logger.warning("cache write failed for %s: %s", video_id, exc)
+
+
 def get_transcript(
     url: str, lang: str | None = None, api_key: str | None = None
 ) -> TranscriptResult:
@@ -182,11 +189,18 @@ def get_transcript(
         api_key = os.environ.get("OPENAI_API_KEY") or None
     video_id = cache.cache_key(url)
 
-    hit = cache.load(video_id)
-    if hit:
-        hit_result = TranscriptResult.from_cache(hit)
-        if hit_result.source == "whisper" or lang is None or hit_result.language == lang:
-            return hit_result
+    try:
+        hit = cache.load(video_id)
+        if hit:
+            hit_result = TranscriptResult.from_cache(hit)
+            if (
+                hit_result.source == "whisper"
+                or lang is None
+                or hit_result.language == lang
+            ):
+                return hit_result
+    except Exception as exc:
+        logger.warning("cache read failed for %s: %s", video_id, exc)
 
     try:
         info = _extract_info(url)
@@ -203,7 +217,7 @@ def get_transcript(
     if result is None and lang:
         result = _from_subtitles(url, video_id, title, manual, auto, want=None)
     if result is not None:
-        cache.save(video_id, result.to_cache())
+        _save_cache(video_id, result)
         return result
 
     available = sorted(set(manual) | set(auto))
@@ -229,5 +243,5 @@ def get_transcript(
         url=url, video_id=video_id, title=title, source="whisper",
         language=used_lang or lang, segments=segments, available_languages=available,
     )
-    cache.save(video_id, result.to_cache())
+    _save_cache(video_id, result)
     return result
