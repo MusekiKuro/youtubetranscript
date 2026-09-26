@@ -11,7 +11,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 _YOUTUBE_RE = re.compile(
     r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)"
-    r"(?P<id>[\w-]{11})"
+    r"(?P<id>[A-Za-z0-9_-]{11})"
 )
 _SAFE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
@@ -39,9 +39,10 @@ def load(video_id: str) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
         return None
+    return data if isinstance(data, dict) else None
 
 
 def save(video_id: str, data: dict) -> None:

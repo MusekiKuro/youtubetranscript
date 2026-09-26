@@ -40,3 +40,25 @@ def test_path_traversal_rejected(tmp_path, monkeypatch):
 def test_missing_file_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DATA_DIR", tmp_path)
     assert cache.load("jNQXAC9IVRw") is None
+
+
+def test_non_ascii_youtube_id_key_is_accepted_by_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DATA_DIR", tmp_path)
+    url = "https://www.youtube.com/watch?v=точкаабвгде"
+    key = cache.cache_key(url)
+    assert key.isascii()
+    payload = {"url": url, "segments": []}
+    cache.save(key, payload)
+    assert cache.load(key) == payload
+
+
+def test_invalid_utf8_file_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DATA_DIR", tmp_path)
+    (tmp_path / "jNQXAC9IVRw.json").write_bytes(b"\xff\xfe not utf8")
+    assert cache.load("jNQXAC9IVRw") is None
+
+
+def test_non_dict_json_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DATA_DIR", tmp_path)
+    (tmp_path / "jNQXAC9IVRw.json").write_text("[1, 2]", encoding="utf-8")
+    assert cache.load("jNQXAC9IVRw") is None
