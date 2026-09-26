@@ -231,6 +231,111 @@ def test_parse_failure_falls_to_auto(data_dir, monkeypatch):
     assert res.source == "auto"
 
 
+def test_auto_falls_back_across_languages_on_fetch_error(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs={}, auto=vtt_entry("auto")))
+
+    def fetch(url):
+        if url.startswith("http://cap/auto/ru.vtt"):
+            raise RuntimeError("429 Too Many Requests")
+        return GOOD_VTT
+
+    monkeypatch.setattr(transcription, "_fetch_captions", fetch)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert res.error is None
+    assert res.source == "auto"
+    assert res.language == "en"
+    assert res.segments[0].text == "Привет из субтитров"
+
+
+def test_manual_falls_back_across_languages_within_source(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual"), auto=vtt_entry("auto")))
+
+    def fetch(url):
+        if url.startswith("http://cap/manual/ru.vtt"):
+            raise RuntimeError("403 from youtube")
+        return GOOD_VTT
+
+    monkeypatch.setattr(transcription, "_fetch_captions", fetch)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert res.source == "manual"
+    assert res.language == "en"
+
+
+def test_explicit_lang_never_crosses_language_family(monkeypatch):
+    table = {
+        "de": [{"ext": "vtt", "url": "http://cap/auto/de.vtt"}],
+        "en": [{"ext": "vtt", "url": "http://cap/auto/en.vtt"}],
+    }
+
+    def fetch(url):
+        if url.endswith("/de.vtt"):
+            raise RuntimeError("429")
+        return GOOD_VTT
+
+    monkeypatch.setattr(transcription, "_fetch_captions", fetch)
+
+    res = transcription._from_subtitles(URL, "abc123def45", "T", {}, table, want="de")
+
+    assert res is None
+
+
+def test_language_candidates_order_when_want_none():
+    table = {"en": [], "de": [], "ru": [], "fr": [], "es": []}
+
+    assert transcription._language_candidates(table, want=None) == [
+        "ru", "en", "de", "es", "fr",
+    ]
+
+
+def test_language_candidates_prefers_exact_then_base_match():
+    table = {"en-US": [], "ru-RU": [], "de": [], "en": []}
+
+    assert transcription._language_candidates(table, want=None) == [
+        "ru-RU", "en", "en-US", "de",
+    ]
+
+
+def test_language_candidates_want_limits_to_family():
+    table = {"en": [], "en-US": [], "en-GB": [], "ru": [], "de": []}
+
+    got = transcription._language_candidates(table, want="en-US")
+
+    assert set(got) == {"en", "en-US", "en-GB"}
+    assert got[0] == "en-US"
+    assert "ru" not in got and "de" not in got
+
+
+def test_both_sources_fail_reports_no_subs_error(data_dir, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual"), auto=vtt_entry("auto")))
+
+    def fetch(url):
+        raise RuntimeError("429 from youtube")
+
+    monkeypatch.setattr(transcription, "_fetch_captions", fetch)
+    called = []
+    monkeypatch.setattr(
+        transcription, "_transcribe_via_whisper", lambda *a, **k: called.append(1))
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert not res.ok
+    assert res.error == "нет транскриптов (нет субтитров, OPENAI_API_KEY не задан)"
+    assert called == []
+
+
 def test_cache_save_failure_still_returns_result(data_dir, monkeypatch):
     monkeypatch.setattr(
         transcription, "_extract_info",

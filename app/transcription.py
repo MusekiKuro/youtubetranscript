@@ -85,24 +85,29 @@ def _fetch_captions(url: str) -> str:
     return response.text
 
 
-def _pick_language(keys: list, want: str | None) -> str | None:
+def _language_candidates(table, want: str | None) -> list[str]:
+    keys = list(table)
     if not keys:
-        return None
+        return []
     if want:
-        if want in keys:
-            return want
         base = want.split("-")[0]
-        for key in keys:
-            if key.split("-")[0] == base:
-                return key
-        return None
+        family = [k for k in keys if k.split("-")[0] == base]
+        family.sort(key=lambda k: (k != want, k))
+        return family
+    ordered: list[str] = []
     for pref in DEFAULT_LANG_PREFERENCE:
         if pref in keys:
-            return pref
-        for key in keys:
-            if key.split("-")[0] == pref:
-                return key
-    return sorted(keys)[0]
+            ordered.append(pref)
+        ordered.extend(
+            k for k in sorted(keys)
+            if k.split("-")[0] == pref and k not in ordered
+        )
+    return ordered + [k for k in sorted(keys) if k not in ordered]
+
+
+def _pick_language(keys: list, want: str | None) -> str | None:
+    candidates = _language_candidates(keys, want)
+    return candidates[0] if candidates else None
 
 
 def _pick_format(formats: list) -> dict | None:
@@ -125,24 +130,23 @@ def _from_subtitles(
     for source_name, table in (("manual", manual), ("auto", auto)):
         if not table:
             continue
-        lang_key = _pick_language(list(table), want)
-        if not lang_key:
-            continue
-        fmt = _pick_format(table[lang_key])
-        if not fmt:
-            continue
-        try:
-            raw = _fetch_captions(fmt["url"])
-            segments = parse_vtt(raw) if fmt["ext"] == "vtt" else parse_srt(raw)
-        except Exception as exc:
-            logger.warning("caption fetch/parse failed for %s: %s", url, exc)
-            continue
-        if not segments:
-            continue
-        return TranscriptResult(
-            url=url, video_id=video_id, title=title, source=source_name,
-            language=lang_key, segments=segments, available_languages=available,
-        )
+        for lang_key in _language_candidates(table, want):
+            fmt = _pick_format(table[lang_key])
+            if not fmt:
+                continue
+            try:
+                raw = _fetch_captions(fmt["url"])
+                segments = parse_vtt(raw) if fmt["ext"] == "vtt" else parse_srt(raw)
+            except Exception as exc:
+                logger.warning("caption fetch/parse failed for %s: %s", url, exc)
+                continue
+            if not segments:
+                logger.warning("empty captions for %s (%s/%s)", url, source_name, lang_key)
+                continue
+            return TranscriptResult(
+                url=url, video_id=video_id, title=title, source=source_name,
+                language=lang_key, segments=segments, available_languages=available,
+            )
     return None
 
 
