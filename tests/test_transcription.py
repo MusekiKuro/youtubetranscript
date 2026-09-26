@@ -77,6 +77,7 @@ def test_caption_fetch_error_falls_to_next_source(data_dir, monkeypatch):
 
 
 def test_no_subs_without_key(data_dir, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(transcription, "_extract_info", lambda url: make_info())
     called = []
     monkeypatch.setattr(
