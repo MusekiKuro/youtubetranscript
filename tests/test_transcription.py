@@ -1,0 +1,187 @@
+import pytest
+
+from app import transcription
+from app.vtt import Segment
+
+GOOD_VTT = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nПривет из субтитров\n"
+URL = "https://youtu.be/abc123def45"
+
+
+def make_info(subs=None, auto=None, title="Test video"):
+    return {
+        "id": "abc123def45",
+        "title": title,
+        "subtitles": subs or {},
+        "automatic_captions": auto or {},
+    }
+
+
+def vtt_entry(prefix):
+    return {
+        "ru": [{"ext": "vtt", "url": f"http://cap/{prefix}/ru.vtt"}],
+        "en": [{"ext": "vtt", "url": f"http://cap/{prefix}/en.vtt"}],
+    }
+
+
+@pytest.fixture
+def data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcription.cache, "DATA_DIR", tmp_path)
+    return tmp_path
+
+
+def test_manual_subtitles_preferred(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual"), auto=vtt_entry("auto")))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert res.source == "manual"
+    assert res.language == "ru"
+    assert res.title == "Test video"
+    assert res.segments[0].text == "Привет из субтитров"
+    assert set(res.available_languages) == {"ru", "en"}
+    assert (data_dir / "abc123def45.json").exists()
+
+
+def test_falls_back_to_auto_captions(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs={}, auto=vtt_entry("auto")))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert res.source == "auto"
+
+
+def test_caption_fetch_error_falls_to_next_source(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual"), auto=vtt_entry("auto")))
+
+    def fetch(url):
+        if url.startswith("http://cap/manual"):
+            raise RuntimeError("403 from youtube")
+        return GOOD_VTT
+
+    monkeypatch.setattr(transcription, "_fetch_captions", fetch)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert res.source == "auto"
+
+
+def test_no_subs_without_key(data_dir, monkeypatch):
+    monkeypatch.setattr(transcription, "_extract_info", lambda url: make_info())
+    called = []
+    monkeypatch.setattr(
+        transcription, "_transcribe_via_whisper", lambda *a, **k: called.append(1))
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert not res.ok
+    assert res.segments == []
+    assert "нет транскриптов" in res.error
+    assert called == []
+
+
+def test_whisper_used_when_no_subs(data_dir, monkeypatch):
+    monkeypatch.setattr(transcription, "_extract_info", lambda url: make_info())
+    monkeypatch.setattr(
+        transcription, "_transcribe_via_whisper",
+        lambda url, lang, key: ([Segment(0.0, 1.0, "расшифровка")], "ru"))
+
+    res = transcription.get_transcript(URL, api_key="sk-test")
+
+    assert res.ok
+    assert res.source == "whisper"
+    assert res.segments[0].text == "расшифровка"
+    assert transcription.cache.load("abc123def45")["source"] == "whisper"
+
+
+def test_whisper_failure_reported_as_error(data_dir, monkeypatch):
+    monkeypatch.setattr(transcription, "_extract_info", lambda url: make_info())
+
+    def boom(url, lang, key):
+        raise RuntimeError("429")
+
+    monkeypatch.setattr(transcription, "_transcribe_via_whisper", boom)
+
+    res = transcription.get_transcript(URL, api_key="sk-test")
+
+    assert not res.ok
+    assert "Whisper недоступен" in res.error
+
+
+def test_extract_info_failure_is_error(data_dir, monkeypatch):
+    def boom(url):
+        raise RuntimeError("приватное видео")
+
+    monkeypatch.setattr(transcription, "_extract_info", boom)
+
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert not res.ok
+    assert "не удалось получить видео" in res.error
+    assert "приватное видео" in res.error
+
+
+def test_cache_hit_skips_network(data_dir, monkeypatch):
+    calls = []
+
+    def extract(url):
+        calls.append(url)
+        return make_info(subs=vtt_entry("manual"))
+
+    monkeypatch.setattr(transcription, "_extract_info", extract)
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    first = transcription.get_transcript(URL, api_key=None)
+    second = transcription.get_transcript(URL, api_key=None)
+
+    assert first.ok and second.ok
+    assert len(calls) == 1
+
+
+def test_strict_lang_choice_skips_to_auto(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(
+            subs={"ru": [{"ext": "vtt", "url": "http://cap/manual/ru.vtt"}]},
+            auto={"de": [{"ext": "vtt", "url": "http://cap/auto/de.vtt"}]},
+        ))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    res = transcription.get_transcript(URL, lang="de", api_key=None)
+
+    assert res.ok
+    assert res.source == "auto"
+    assert res.language == "de"
+
+
+def test_missing_lang_falls_back_to_available(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info", lambda url: make_info(subs=vtt_entry("manual")))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    res = transcription.get_transcript(URL, lang="de", api_key=None)
+
+    assert res.ok
+    assert res.language == "ru"
+
+
+def test_playlist_entry_unwrapped(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual")))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    res = transcription.get_transcript(
+        "https://www.youtube.com/playlist?list=PLxxx", api_key=None)
+
+    assert res.ok
