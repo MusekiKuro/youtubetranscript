@@ -38,20 +38,14 @@ def _segments_from_cache(data: dict) -> list[Segment]:
 
 
 def _safe_filename(title: str, video_id: str) -> str:
-    cleaned = re.sub(r'[\\/:*?"<>|]+', "_", title).strip(" .")
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "_", title)
+    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f]+", "_", cleaned).strip(" .")
     return (cleaned or video_id)[:100]
 
 
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", media_type="text/html")
-
-
-@app.get("/api", include_in_schema=False)
-def api_root() -> None:
-    # httpx (TestClient) нормализует dot-сегменты на стороне клиента:
-    # запрос GET /api/transcript/.. приходит на сервер как GET /api.
-    raise HTTPException(400, "некорректный путь")
 
 
 @app.post("/api/parse")

@@ -112,7 +112,7 @@ def test_unknown_job_404(client):
 
 def test_transcript_rejects_bad_id(client, monkeypatch, tmp_path):
     monkeypatch.setattr(cache, "DATA_DIR", tmp_path)
-    assert client.get("/api/transcript/..").status_code == 400
+    assert client.get("/api/transcript/...").status_code == 400
     assert client.get("/api/transcript/..%2F..%2Fevil").status_code in (400, 404)
     assert list(tmp_path.glob("*")) == []
 
