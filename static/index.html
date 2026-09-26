@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Парсер транскриптов</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  textarea { width: 100%; font: inherit; padding: .5rem; box-sizing: border-box; }
+  .row { display: flex; gap: .5rem; margin: .75rem 0; align-items: center; flex-wrap: wrap; }
+  input[type=text] { padding: .4rem; font: inherit; }
+  button { padding: .45rem .9rem; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #8884; vertical-align: top; }
+  .st-done { color: #1a7f37; }
+  .st-error { color: #cf222e; }
+  .st-running, .st-pending { color: #9a6700; }
+  .err-text { font-size: .85rem; color: #cf222e; }
+  #viewer { position: fixed; inset: 0; background: Canvas; overflow: auto; padding: 1.5rem; }
+  #viewer pre { white-space: pre-wrap; background: #8881; padding: 1rem; border-radius: 6px; }
+  .chip { border: 1px solid #8886; border-radius: 999px; padding: .15rem .6rem; cursor: pointer; font-size: .85rem; }
+  .chip.active { background: #0969da; color: white; border-color: transparent; }
+  a.dl { margin-right: .75rem; }
+</style>
+</head>
+<body>
+<h1>Парсер транскриптов</h1>
+<p>Вставьте ссылки на видео (одна в строке). Источники: авторские субтитры → автосубтитры → Whisper API.</p>
+
+<textarea id="links" rows="6" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..."></textarea>
+
+<div class="row">
+  <input type="text" id="lang" placeholder="язык (напр. ru) — пусто = авто" size="24">
+  <button id="go">Получить транскрипты</button>
+  <a id="zip" style="display:none">Скачать всё ZIP</a>
+</div>
+<p id="msg" class="err-text"></p>
+
+<table id="tbl" hidden>
+  <thead>
+    <tr><th>Ссылка</th><th>Статус</th><th>Название</th><th>Источник</th><th></th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<div id="viewer" hidden>
+  <div class="row">
+    <strong id="v-title"></strong>
+    <span id="v-langs"></span>
+  </div>
+  <div class="row">
+    <a class="dl" id="dl-srt">Скачать .srt</a>
+    <a class="dl" id="dl-txt">Скачать .txt</a>
+    <button id="close">Закрыть</button>
+  </div>
+  <pre id="v-text"></pre>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SRC_LABEL = { manual: "ручные субтитры", auto: "автосубтитры", whisper: "Whisper" };
+let jobId = null;
+let pollTimer = null;
+let currentVideoId = null;
+let availableLangs = [];
+let currentLang = null;
+
+async function api(path, options) {
+  const resp = await fetch(path, options);
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try { detail = (await resp.json()).detail || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  return resp;
+}
+
+function statusLabel(item) {
+  if (item.status === "pending") return "в очереди";
+  if (item.status === "running") return "обрабатывается…";
+  if (item.status === "done") return "готово";
+  return item.error || "ошибка";
+}
+
+function renderRows(items) {
+  const tbody = $("rows");
+  tbody.innerHTML = "";
+  for (const item of items) {
+    const tr = document.createElement("tr");
+
+    const tdUrl = document.createElement("td");
+    tdUrl.textContent = item.url;
+    tr.appendChild(tdUrl);
+
+    const tdStatus = document.createElement("td");
+    tdStatus.className = "st-" + item.status;
+    tdStatus.textContent = statusLabel(item);
+    tr.appendChild(tdStatus);
+
+    const tdTitle = document.createElement("td");
+    tdTitle.textContent = item.title || "";
+    tr.appendChild(tdTitle);
+
+    const tdSource = document.createElement("td");
+    tdSource.textContent = item.source ? (SRC_LABEL[item.source] || item.source) : "";
+    tr.appendChild(tdSource);
+
+    const tdAction = document.createElement("td");
+    if (item.status === "done" && item.video_id) {
+      const btn = document.createElement("button");
+      btn.textContent = "Смотреть";
+      btn.onclick = () => openTranscript(item.video_id, null);
+      tdAction.appendChild(btn);
+    }
+    tr.appendChild(tdAction);
+
+    tbody.appendChild(tr);
+  }
+  const anyDone = items.some((i) => i.status === "done");
+  const zip = $("zip");
+  zip.style.display = anyDone ? "inline" : "none";
+  if (jobId) zip.href = "/api/jobs/" + jobId + "/zip";
+}
+
+async function poll() {
+  try {
+    const job = await (await api("/api/jobs/" + jobId)).json();
+    renderRows(job.items);
+    if (job.status === "done") {
+      clearTimeout(pollTimer);
+      $("go").disabled = false;
+      $("msg").textContent = "";
+    } else {
+      pollTimer = setTimeout(poll, 700);
+    }
+  } catch (err) {
+    $("msg").textContent = "Ошибка опроса: " + err.message + ". Обновите страницу.";
+    $("go").disabled = false;
+  }
+}
+
+async function start() {
+  const lines = $("links").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!lines.length) { $("msg").textContent = "Вставьте хотя бы одну ссылку."; return; }
+  const lang = $("lang").value.trim() || null;
+  $("msg").textContent = "";
+  $("go").disabled = true;
+  $("zip").style.display = "none";
+  clearTimeout(pollTimer);
+  try {
+    const resp = await api("/api/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ links: lines, lang: lang }),
+    });
+    const data = await resp.json();
+    jobId = data.job_id;
+    $("tbl").hidden = false;
+    renderRows(lines.map((u) => ({ url: u, status: "pending" })));
+    pollTimer = setTimeout(poll, 300);
+  } catch (err) {
+    $("msg").textContent = err.message;
+    $("go").disabled = false;
+  }
+}
+
+async function openTranscript(videoId, lang) {
+  try {
+    const url = "/api/transcript/" + encodeURIComponent(videoId) +
+      (lang ? "?lang=" + encodeURIComponent(lang) : "");
+    const data = await (await api(url)).json();
+    currentVideoId = videoId;
+    currentLang = lang || data.language;
+    availableLangs = data.available_languages || [];
+    $("v-title").textContent = data.title || videoId;
+    $("v-text").textContent = (data.segments || [])
+      .map((s) => {
+        const t = Math.floor(s.start);
+        const mm = String(Math.floor(t / 60)).padStart(2, "0");
+        const ss = String(t % 60).padStart(2, "0");
+        return "[" + mm + ":" + ss + "] " + s.text;
+      }).join("\n") || "(пусто)";
+    $("dl-srt").href = "/api/transcript/" + videoId + "/download?format=srt";
+    $("dl-txt").href = "/api/transcript/" + videoId + "/download?format=txt";
+    $("dl-srt").setAttribute("download", "");
+    $("dl-txt").setAttribute("download", "");
+    const langs = $("v-langs");
+    langs.innerHTML = "";
+    if (availableLangs.length > 1) {
+      for (const code of availableLangs) {
+        const chip = document.createElement("span");
+        chip.className = "chip" + (code === currentLang ? " active" : "");
+        chip.textContent = code;
+        chip.onclick = () => openTranscript(videoId, code);
+        langs.appendChild(chip);
+      }
+    }
+    $("viewer").hidden = false;
+  } catch (err) {
+    $("msg").textContent = "Не удалось показать транскрипт: " + err.message;
+  }
+}
+
+$("go").onclick = start;
+$("close").onclick = () => { $("viewer").hidden = true; };
+</script>
+</body>
+</html>
