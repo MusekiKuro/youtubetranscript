@@ -7,7 +7,12 @@ import re
 import tempfile
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+if os.environ.get("VERCEL"):
+    DATA_DIR = Path("/tmp/transcript-cache")
+else:
+    DATA_DIR = Path(os.environ.get("TRANSCRIPT_DATA_DIR")) if os.environ.get(
+        "TRANSCRIPT_DATA_DIR"
+    ) else Path(__file__).resolve().parent.parent / "data"
 
 _YOUTUBE_RE = re.compile(
     r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)"

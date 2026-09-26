@@ -1,0 +1,11 @@
+.venv/
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env
+data/
+docs/
+.superpowers/
+tests/
+pytest.ini
