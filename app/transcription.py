@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -66,6 +67,28 @@ class TranscriptResult:
         )
 
 
+def _cookie_file() -> str | None:
+    """Путь к cookies.txt для yt-dlp (bot-check обходится аутентификацией).
+
+    YOUTUBE_COOKIES_FILE — путь к файлу; YOUTUBE_COOKIES — содержимое
+    cookies.txt в env (для serverless, где нет файла)."""
+    path = os.environ.get("YOUTUBE_COOKIES_FILE")
+    if path and Path(path).is_file():
+        return path
+    content = os.environ.get("YOUTUBE_COOKIES", "")
+    if not content.strip():
+        return None
+    if not content.endswith("\n"):
+        content += "\n"
+    digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:12]
+    target = Path(tempfile.gettempdir()) / f"youtube-cookies-{digest}.txt"
+    if not target.exists():
+        tmp = target.parent / f"{target.name}.tmp{os.getpid()}"
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
+    return str(target)
+
+
 def _ydl_opts(player_client: tuple[str, ...] | None = None) -> dict:
     opts = {
         "quiet": True,
@@ -73,8 +96,17 @@ def _ydl_opts(player_client: tuple[str, ...] | None = None) -> dict:
         "skip_download": True,
         "noplaylist": True,
     }
+    cookiefile = _cookie_file()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
     if player_client:
         opts["extractor_args"] = {"youtube": {"player_client": list(player_client)}}
+    return opts
+
+
+def _whisper_ydl_opts(outtmpl: str) -> dict:
+    opts = {**_ydl_opts(), "format": "bestaudio/best", "outtmpl": outtmpl}
+    opts.pop("skip_download", None)
     return opts
 
 
@@ -185,13 +217,7 @@ def _transcribe_via_whisper(
 ) -> tuple[list[Segment], str | None]:
     with tempfile.TemporaryDirectory(prefix="transcript-audio-") as tmp:
         tmp_path = Path(tmp)
-        opts = {
-            "format": "bestaudio/best",
-            "outtmpl": str(tmp_path / "audio.%(ext)s"),
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-        }
+        opts = _whisper_ydl_opts(str(tmp_path / "audio.%(ext)s"))
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
         candidates = sorted(tmp_path.glob("audio.*"))

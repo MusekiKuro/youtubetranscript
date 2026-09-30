@@ -15,6 +15,19 @@ cp .env.example .env        # вписать OPENAI_API_KEY (опциональ�
 Открыть http://127.0.0.1:8000 — вставить ссылки, получить транскрипты,
 смотреть с таймкодами, скачать .srt / .txt / ZIP.
 
+## Cookies (если YouTube отвечает «Sign in to confirm you're not a bot»)
+
+Так бывает на датацентр-IP (например, Vercel). Нужен cookies.txt из браузера,
+где вы вошли в YouTube (расширение «Get cookies.txt LOCALLY» или экспорт по
+инструкции yt-dlp wiki):
+
+- локально: файл `cookies.txt` в корне репо (в .gitignore) + в `.env`:
+  `YOUTUBE_COOKIES_FILE=cookies.txt`;
+  либо вставить содержимое файла в `.env` как `YOUTUBE_COOKIES="<содержимое>"`;
+- Vercel: `npx vercel env add YOUTUBE_COOKIES production < cookies.txt`.
+
+Cookies — секрет: не коммитить, не публиковать.
+
 ## Тесты
 
 ```bash

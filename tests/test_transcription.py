@@ -432,3 +432,46 @@ def test_extract_info_no_fallback_for_genuine_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="приватное видео"):
         transcription._extract_info(URL)
+
+
+def test_ydl_opts_uses_cookie_file_path(monkeypatch, tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(cookies))
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+
+    assert transcription._ydl_opts()["cookiefile"] == str(cookies)
+
+
+def test_ydl_opts_writes_inline_cookies_to_file(monkeypatch):
+    content = (
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttestvalue\n"
+    )
+    monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
+    monkeypatch.setenv("YOUTUBE_COOKIES", content)
+
+    cookiefile = transcription._ydl_opts()["cookiefile"]
+
+    from pathlib import Path
+    assert Path(cookiefile).read_text(encoding="utf-8") == content
+
+
+def test_ydl_opts_without_cookies(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+
+    assert "cookiefile" not in transcription._ydl_opts()
+
+
+def test_whisper_download_opts_include_cookies(monkeypatch, tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(cookies))
+
+    opts = transcription._whisper_ydl_opts("audio.%(ext)s")
+
+    assert opts["cookiefile"] == str(cookies)
+    assert opts["format"] == "bestaudio/best"
+    assert opts["outtmpl"] == "audio.%(ext)s"
+    assert not opts.get("skip_download")
