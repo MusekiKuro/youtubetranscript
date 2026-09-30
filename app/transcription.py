@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LANG_PREFERENCE = ("ru", "en")
 _CAPTION_EXTS = ("vtt", "srt")
+# Версия схемы разобранного транскрипта: bump при изменении app/vtt.py,
+# чтобы записи старого парсера (с дублями эхо-cue) не отдавались из кэша.
+PARSER_REV = 2
 
 
 @dataclass
@@ -41,6 +44,7 @@ class TranscriptResult:
             "title": self.title,
             "source": self.source,
             "language": self.language,
+            "parser_rev": PARSER_REV,
             "available_languages": self.available_languages,
             "segments": [
                 {"start": s.start, "end": s.end, "text": s.text} for s in self.segments
@@ -221,7 +225,7 @@ def get_transcript(
 
     try:
         hit = cache.load(video_id)
-        if hit:
+        if hit and hit.get("parser_rev") == PARSER_REV:
             hit_result = TranscriptResult.from_cache(hit)
             if (
                 hit_result.source == "whisper"

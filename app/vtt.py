@@ -41,6 +41,13 @@ def _seconds(h: str, m: str, s: str, ms: str) -> float:
     return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.ljust(3, "0")) / 1000
 
 
+def _normalize(text: str) -> str:
+    return " ".join(text.split())
+
+
+_ECHO_MAX_DURATION = 0.05
+
+
 def _strip_rollup(current: str, previous_full: str) -> str:
     """Автосубтитры: каждая реплика повторяет предыдущую целиком (roll-up).
 
@@ -68,7 +75,14 @@ def parse_timed_text(content: str) -> list:
         end = _seconds(match["h2"], match["m2"], match["s2"], match["ms2"])
         i += 1
         block = []
-        while i < len(lines) and lines[i].strip() and not _TIMING_RE.search(lines[i]):
+        while i < len(lines) and not _TIMING_RE.search(lines[i]):
+            if not lines[i].strip():
+                # Пустая строка — конец cue; строка из пробелов — пропускаем
+                # (YouTube ASR ставит " " до контекста и после эхо-cue).
+                if lines[i] == "" or block:
+                    break
+                i += 1
+                continue
             cleaned = _clean(lines[i])
             if cleaned:
                 block.append(cleaned)
@@ -78,6 +92,14 @@ def parse_timed_text(content: str) -> list:
             continue
         text = _strip_rollup(full, previous_full)
         previous_full = full
+        if (
+            segments
+            and end - start <= _ECHO_MAX_DURATION
+            and _normalize(text) == _normalize(segments[-1].text)
+        ):
+            # YouTube ASR добавляет 10мс echo-cue, повторяющую только что
+            # выданную реплику, — дубль, а не настоящее повторение речи.
+            continue
         segments.append(Segment(start=start, end=end, text=text))
     return segments
 

@@ -149,6 +149,32 @@ def test_cache_hit_skips_network(data_dir, monkeypatch):
     assert len(calls) == 1
 
 
+def test_stale_cache_entry_is_refetched(data_dir, monkeypatch):
+    monkeypatch.setattr(
+        transcription, "_extract_info",
+        lambda url: make_info(subs=vtt_entry("manual")))
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    transcription.get_transcript(URL, api_key=None)
+
+    stale = transcription.cache.load("abc123def45")
+    stale.pop("parser_rev", None)
+    transcription.cache.save("abc123def45", stale)
+
+    calls = []
+
+    def extract(url):
+        calls.append(url)
+        return make_info(subs=vtt_entry("manual"))
+
+    monkeypatch.setattr(transcription, "_extract_info", extract)
+    res = transcription.get_transcript(URL, api_key=None)
+
+    assert res.ok
+    assert len(calls) == 1
+    assert transcription.cache.load("abc123def45").get("parser_rev")
+
+
 def test_strict_lang_choice_skips_to_auto(data_dir, monkeypatch):
     monkeypatch.setattr(
         transcription, "_extract_info",

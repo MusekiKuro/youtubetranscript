@@ -60,6 +60,73 @@ def test_cue_with_repeated_single_line_is_kept():
     assert [s.text for s in segs] == ["Привет", "Привет"]
 
 
+def test_leading_whitespace_line_does_not_drop_cue():
+    content = (
+        "WEBVTT\n"
+        "\n"
+        "00:00:00.160 --> 00:00:02.230\n"
+        " \n"
+        "Всем привет\n"
+        "\n"
+        "00:00:02.230 --> 00:00:04.000\n"
+        "Всем привет\n"
+        "новая реплика\n"
+    )
+    segs = parse_vtt(content)
+    assert [s.text for s in segs] == ["Всем привет", "новая реплика"]
+
+
+def test_asr_echo_duplicate_dropped():
+    content = (
+        "WEBVTT\n"
+        "\n"
+        "00:00:00.000 --> 00:00:01.000\n"
+        "Всем привет\n"
+        "\n"
+        "00:00:01.000 --> 00:00:03.000\n"
+        "Всем привет\n"
+        "новая реплика\n"
+        "\n"
+        "00:00:03.000 --> 00:00:03.010\n"
+        "новая реплика\n"
+        "\n"
+        "00:00:03.010 --> 00:00:06.000\n"
+        "новая реплика\n"
+        "третья реплика\n"
+    )
+    segs = parse_vtt(content)
+    assert [s.text for s in segs] == ["Всем привет", "новая реплика", "третья реплика"]
+    assert all(s.end - s.start > 0.1 for s in segs)
+
+
+def test_tiny_unique_cue_kept():
+    content = (
+        "WEBVTT\n"
+        "\n"
+        "00:00:00.000 --> 00:00:02.000\n"
+        "первая\n"
+        "\n"
+        "00:00:02.000 --> 00:00:02.010\n"
+        "единичка\n"
+    )
+    segs = parse_vtt(content)
+    assert [s.text for s in segs] == ["первая", "единичка"]
+
+
+def test_youtube_asr_fixture_has_no_dups_and_no_losses():
+    content = (FIXTURES / "youtube_asr.vtt").read_text(encoding="utf-8")
+    segs = parse_vtt(content)
+    assert [s.start for s in segs] == [0.16, 2.24, 4.279, 7.439, 9.719]
+    assert [s.text for s in segs] == [
+        "Всем привет. Сегодня хотел рассказать о",
+        "полноценном цикле вайп-кодинга реального",
+        "приложения от самого нуля до реального",
+        "результата. В этом видео вы увидите",
+        "построение реального веб-приложения и",
+    ]
+    assert all(s.end - s.start >= 0.1 for s in segs)
+
+
 def test_segments_to_srt_format():
     segs = parse_srt(SRT_SAMPLE)
     out = segments_to_srt(segs)
