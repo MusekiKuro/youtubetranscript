@@ -89,16 +89,22 @@ def _cookie_file() -> str | None:
     return str(target)
 
 
-def _ydl_opts(player_client: tuple[str, ...] | None = None) -> dict:
+def _ydl_opts(
+    player_client: tuple[str, ...] | None = None, use_cookies: bool = False
+) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
     }
-    cookiefile = _cookie_file()
-    if cookiefile:
-        opts["cookiefile"] = cookiefile
+    if use_cookies:
+        cookiefile = _cookie_file()
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+            # Аккаунтные эксперименты YouTube (SABR-only) прячут форматы,
+            # но субтитры в ответе остаются — для нас это не ошибка.
+            opts["ignore_no_formats_error"] = True
     if player_client:
         opts["extractor_args"] = {"youtube": {"player_client": list(player_client)}}
     return opts
@@ -120,13 +126,18 @@ _YT_CLIENT_FALLBACKS: tuple[tuple[str, ...], ...] = (
 
 def _extract_info(url: str) -> dict:
     is_youtube = "youtube.com" in url or "youtu.be" in url
-    attempts: list[tuple[str, ...] | None] = [None]
+    attempts: list[tuple[tuple[str, ...] | None, bool]] = [(None, False)]
     if is_youtube:
-        attempts.extend(_YT_CLIENT_FALLBACKS)
+        attempts.extend((client, False) for client in _YT_CLIENT_FALLBACKS)
+        if _cookie_file():
+            # Анонимные попытки первыми (работают с резидентных IP);
+            # cookies — fallback для IP в bot-check (дашборды вроде Vercel).
+            attempts.append((None, True))
+            attempts.extend((client, True) for client in _YT_CLIENT_FALLBACKS)
     last_error: Exception | None = None
-    for client in attempts:
+    for client, use_cookies in attempts:
         try:
-            with yt_dlp.YoutubeDL(_ydl_opts(client)) as ydl:
+            with yt_dlp.YoutubeDL(_ydl_opts(client, use_cookies=use_cookies)) as ydl:
                 info = ydl.extract_info(url, download=False)
             break
         except Exception as exc:
@@ -134,7 +145,8 @@ def _extract_info(url: str) -> dict:
                 raise
             last_error = exc
             logger.warning(
-                "youtube bot-check with client %s, retrying: %s", client, exc
+                "youtube bot-check with client %s%s, retrying: %s",
+                client, " (cookies)" if use_cookies else "", exc,
             )
     else:
         raise last_error  # type: ignore[misc]

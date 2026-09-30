@@ -434,13 +434,21 @@ def test_extract_info_no_fallback_for_genuine_error(monkeypatch):
         transcription._extract_info(URL)
 
 
-def test_ydl_opts_uses_cookie_file_path(monkeypatch, tmp_path):
+def _cookies_env(monkeypatch, tmp_path, content="# Netscape HTTP Cookie File\n"):
     cookies = tmp_path / "cookies.txt"
-    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    cookies.write_text(content, encoding="utf-8")
     monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(cookies))
     monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+    return str(cookies)
 
-    assert transcription._ydl_opts()["cookiefile"] == str(cookies)
+
+def test_ydl_opts_uses_cookie_file_path(monkeypatch, tmp_path):
+    path = _cookies_env(monkeypatch, tmp_path)
+
+    opts = transcription._ydl_opts(use_cookies=True)
+
+    assert opts["cookiefile"] == path
+    assert opts["ignore_no_formats_error"] is True
 
 
 def test_ydl_opts_writes_inline_cookies_to_file(monkeypatch):
@@ -451,27 +459,70 @@ def test_ydl_opts_writes_inline_cookies_to_file(monkeypatch):
     monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
     monkeypatch.setenv("YOUTUBE_COOKIES", content)
 
-    cookiefile = transcription._ydl_opts()["cookiefile"]
+    cookiefile = transcription._ydl_opts(use_cookies=True)["cookiefile"]
 
     from pathlib import Path
     assert Path(cookiefile).read_text(encoding="utf-8") == content
 
 
-def test_ydl_opts_without_cookies(monkeypatch):
+def test_ydl_opts_without_cookie_config(monkeypatch):
     monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
     monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
 
-    assert "cookiefile" not in transcription._ydl_opts()
+    opts = transcription._ydl_opts(use_cookies=True)
+
+    assert "cookiefile" not in opts
+    assert "ignore_no_formats_error" not in opts
 
 
-def test_whisper_download_opts_include_cookies(monkeypatch, tmp_path):
-    cookies = tmp_path / "cookies.txt"
-    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
-    monkeypatch.setenv("YOUTUBE_COOKIES_FILE", str(cookies))
+def test_ydl_opts_anonymous_ignores_configured_cookies(monkeypatch, tmp_path):
+    _cookies_env(monkeypatch, tmp_path)
+
+    opts = transcription._ydl_opts()
+
+    assert "cookiefile" not in opts
+    assert "ignore_no_formats_error" not in opts
+
+
+def test_whisper_download_opts_stay_anonymous(monkeypatch, tmp_path):
+    _cookies_env(monkeypatch, tmp_path)
 
     opts = transcription._whisper_ydl_opts("audio.%(ext)s")
 
-    assert opts["cookiefile"] == str(cookies)
+    assert "cookiefile" not in opts
     assert opts["format"] == "bestaudio/best"
     assert opts["outtmpl"] == "audio.%(ext)s"
     assert not opts.get("skip_download")
+
+
+def test_extract_info_falls_back_to_cookies_on_bot_check(monkeypatch, tmp_path):
+    _cookies_env(monkeypatch, tmp_path)
+    calls = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            calls.append(dict(self.opts))
+            if "cookiefile" not in self.opts:
+                raise RuntimeError("Sign in to confirm you're not a bot")
+            return dict(make_info(auto=vtt_entry("auto")))
+
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", FakeYDL)
+
+    info = transcription._extract_info(URL)
+
+    assert info["title"] == "Test video"
+    assert len(calls) == 5
+    assert all("cookiefile" not in c for c in calls[:4])
+    assert "cookiefile" in calls[4]
+    assert calls[4]["ignore_no_formats_error"] is True
+    assert "extractor_args" not in calls[0]
+    assert "extractor_args" not in calls[4]
