@@ -526,3 +526,37 @@ def test_extract_info_falls_back_to_cookies_on_bot_check(monkeypatch, tmp_path):
     assert calls[4]["ignore_no_formats_error"] is True
     assert "extractor_args" not in calls[0]
     assert "extractor_args" not in calls[4]
+
+
+def test_extract_info_logs_success_path(monkeypatch, caplog):
+    import logging
+
+    fake = _fake_ydl(False, make_info(auto=vtt_entry("auto")))
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", fake)
+
+    with caplog.at_level(logging.INFO, logger="app.transcription"):
+        transcription._extract_info(URL)
+
+    records = [r.getMessage() for r in caplog.records]
+    assert any(
+        "extract ok" in m and "cookies=False" in m and "client=None" in m
+        for m in records
+    )
+
+
+def test_from_subtitles_logs_caption_tables(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(transcription, "_fetch_captions", lambda u: GOOD_VTT)
+
+    with caplog.at_level(logging.INFO, logger="app.transcription"):
+        res = transcription._from_subtitles(
+            URL, "abc123def45", "T", {}, vtt_entry("auto"), want=None
+        )
+
+    assert res is not None
+    records = [r.getMessage() for r in caplog.records]
+    assert any(
+        "caption tables" in m and "manual=0" in m and "auto=2" in m and "pickable=2" in m
+        for m in records
+    )

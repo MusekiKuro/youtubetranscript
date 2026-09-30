@@ -139,6 +139,9 @@ def _extract_info(url: str) -> dict:
         try:
             with yt_dlp.YoutubeDL(_ydl_opts(client, use_cookies=use_cookies)) as ydl:
                 info = ydl.extract_info(url, download=False)
+            logger.info(
+                "extract ok (cookies=%s, client=%s)", use_cookies, client
+            )
             break
         except Exception as exc:
             if not any(marker in str(exc) for marker in _BOT_CHECK_MARKERS):
@@ -201,6 +204,16 @@ def _from_subtitles(
     want: str | None,
 ) -> TranscriptResult | None:
     available = sorted(set(manual) | set(auto))
+    pickable = sum(
+        1
+        for table in (manual, auto)
+        for fmts in table.values()
+        if _pick_format(fmts)
+    )
+    logger.info(
+        "caption tables for %s: manual=%d auto=%d pickable=%d",
+        video_id, len(manual), len(auto), pickable,
+    )
     for source_name, table in (("manual", manual), ("auto", auto)):
         if not table:
             continue
