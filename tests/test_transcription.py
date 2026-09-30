@@ -352,3 +352,57 @@ def test_cache_save_failure_still_returns_result(data_dir, monkeypatch):
     assert res.ok
     assert res.source == "manual"
     assert res.segments[0].text == "Привет из субтитров"
+
+
+def _fake_ydl(fail_first, info):
+    class FakeYDL:
+        calls = []
+
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            FakeYDL.calls.append(self.opts)
+            if fail_first and "extractor_args" not in self.opts:
+                raise RuntimeError("Sign in to confirm you're not a bot")
+            return dict(info)
+
+    return FakeYDL
+
+
+def test_extract_info_retries_youtube_client_fallback(monkeypatch):
+    fake = _fake_ydl(True, make_info(auto=vtt_entry("auto")))
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", fake)
+
+    info = transcription._extract_info(URL)
+
+    assert info["title"] == "Test video"
+    assert len(fake.calls) >= 2
+    args = fake.calls[1]["extractor_args"]["youtube"]["player_client"]
+    assert args == ["tv_embedded"]
+
+
+def test_extract_info_no_fallback_for_genuine_error(monkeypatch):
+    class FailingYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise RuntimeError("приватное видео")
+
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", FailingYDL)
+
+    with pytest.raises(RuntimeError, match="приватное видео"):
+        transcription._extract_info(URL)

@@ -62,15 +62,46 @@ class TranscriptResult:
         )
 
 
-def _extract_info(url: str) -> dict:
+def _ydl_opts(player_client: tuple[str, ...] | None = None) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    if player_client:
+        opts["extractor_args"] = {"youtube": {"player_client": list(player_client)}}
+    return opts
+
+
+_BOT_CHECK_MARKERS = ("Sign in to confirm", "page needs to be reloaded")
+_YT_CLIENT_FALLBACKS: tuple[tuple[str, ...], ...] = (
+    ("tv_embedded",),
+    ("chrome",),
+    ("android_vr",),
+)
+
+
+def _extract_info(url: str) -> dict:
+    is_youtube = "youtube.com" in url or "youtu.be" in url
+    attempts: list[tuple[str, ...] | None] = [None]
+    if is_youtube:
+        attempts.extend(_YT_CLIENT_FALLBACKS)
+    last_error: Exception | None = None
+    for client in attempts:
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts(client)) as ydl:
+                info = ydl.extract_info(url, download=False)
+            break
+        except Exception as exc:
+            if not any(marker in str(exc) for marker in _BOT_CHECK_MARKERS):
+                raise
+            last_error = exc
+            logger.warning(
+                "youtube bot-check with client %s, retrying: %s", client, exc
+            )
+    else:
+        raise last_error  # type: ignore[misc]
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
         if not entries:
