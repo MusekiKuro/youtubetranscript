@@ -135,14 +135,11 @@ def _extract_info(url: str) -> dict:
             attempts.append((None, True))
             attempts.extend((client, True) for client in _YT_CLIENT_FALLBACKS)
     last_error: Exception | None = None
+    info: dict | None = None
     for client, use_cookies in attempts:
         try:
             with yt_dlp.YoutubeDL(_ydl_opts(client, use_cookies=use_cookies)) as ydl:
                 info = ydl.extract_info(url, download=False)
-            logger.info(
-                "extract ok (cookies=%s, client=%s)", use_cookies, client
-            )
-            break
         except Exception as exc:
             if not any(marker in str(exc) for marker in _BOT_CHECK_MARKERS):
                 raise
@@ -151,8 +148,25 @@ def _extract_info(url: str) -> dict:
                 "youtube bot-check with client %s%s, retrying: %s",
                 client, " (cookies)" if use_cookies else "", exc,
             )
+            continue
+        if is_youtube and not (
+            info.get("subtitles") or info.get("automatic_captions")
+        ):
+            # Инфо без caption-таблиц для нас непригодно (так бывает на
+            # датацентр-IP): пробуем следующий клиент.
+            logger.warning(
+                "no caption tables (client=%s, cookies=%s), retrying",
+                client, use_cookies,
+            )
+            continue
+        logger.info(
+            "extract ok (cookies=%s, client=%s)", use_cookies, client
+        )
+        break
     else:
-        raise last_error  # type: ignore[misc]
+        if info is None:
+            raise last_error  # type: ignore[misc]
+        logger.info("extract finished without caption tables")
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
         if not entries:

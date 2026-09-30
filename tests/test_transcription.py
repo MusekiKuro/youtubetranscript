@@ -560,3 +560,59 @@ def test_from_subtitles_logs_caption_tables(monkeypatch, caplog):
         "caption tables" in m and "manual=0" in m and "auto=2" in m and "pickable=2" in m
         for m in records
     )
+
+
+def test_extract_info_retries_when_no_caption_tables(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+    calls = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            calls.append(dict(self.opts))
+            if len(calls) == 1:
+                return make_info(subs={}, auto={})
+            return make_info(auto=vtt_entry("auto"))
+
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", FakeYDL)
+
+    info = transcription._extract_info(URL)
+
+    assert len(calls) == 2
+    assert info.get("automatic_captions")
+
+
+def test_extract_info_returns_info_when_captions_never_appear(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_COOKIES_FILE", raising=False)
+    monkeypatch.delenv("YOUTUBE_COOKIES", raising=False)
+    calls = []
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            calls.append(dict(self.opts))
+            return make_info(subs={}, auto={})
+
+    monkeypatch.setattr(transcription.yt_dlp, "YoutubeDL", FakeYDL)
+
+    info = transcription._extract_info(URL)
+
+    assert info["title"] == "Test video"
+    assert len(calls) == 4
